@@ -1,0 +1,20 @@
+{
+  "name": "db-autorun",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Run files and folders of SQL scripts against SQL Server, Oracle, PostgreSQL or MySQL/MariaDB from a local web app.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js --open",
+    "test": "node --test --experimental-test-module-mocks"
+  },
+  "dependencies": {
+    "mssql": "^12.7.14",
+    "mysql2": "^3.24.6",
+    "oracledb": "^26.0.0",
+    "pg": "^8.23.1"
+  }
+}

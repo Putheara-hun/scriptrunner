@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DB AutoRun</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+
+  <main id="connect-view" class="connect-view">
+    <div class="connect-card">
+      <h1>DB AutoRun</h1>
+      <p class="muted">Connect to a database, add your SQL scripts, and run them in order.</p>
+
+      <form id="connect-form" novalidate>
+        <fieldset class="location">
+          <legend>Connect to</legend>
+          <div class="segmented">
+            <label>
+              <input type="radio" name="location" value="internet" checked>
+              <span>Over the internet</span>
+            </label>
+            <label>
+              <input type="radio" name="location" value="local">
+              <span>This computer</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <div class="field">
+          <label id="db-type-label">Database type</label>
+          <div class="custom-select" id="db-select">
+            <button type="button" class="select-button" id="db-type-button"
+                    aria-haspopup="listbox" aria-expanded="false" aria-labelledby="db-type-label db-type-value">
+              <span class="select-value is-placeholder" id="db-type-value">Choose a database…</span>
+              <svg class="select-caret" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <ul class="select-list" id="db-type-list" role="listbox" aria-labelledby="db-type-label" tabindex="-1" hidden></ul>
+            <select id="db-type" class="visually-hidden" tabindex="-1" aria-hidden="true">
+              <option value="" selected disabled>Choose a database…</option>
+              <option value="mssql">Microsoft SQL Server</option>
+              <option value="oracle">Oracle Database</option>
+              <option value="postgres">PostgreSQL</option>
+              <option value="mysql">MySQL / MariaDB</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="connection-fields" hidden>
+          <div class="field-row">
+            <div class="field grow">
+              <label for="server">Server name</label>
+              <input id="server" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="field port">
+              <label for="port">Port</label>
+              <input id="port" type="number" min="1" max="65535" autocomplete="off">
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="database" id="database-label">Database</label>
+            <input id="database" autocomplete="off" spellcheck="false">
+          </div>
+
+          <div class="field-row">
+            <div class="field grow">
+              <label for="user">User</label>
+              <input id="user" autocomplete="username" spellcheck="false">
+            </div>
+            <div class="field grow">
+              <label for="password">Password</label>
+              <input id="password" type="password" autocomplete="current-password">
+            </div>
+          </div>
+
+          <label id="encrypt-option" class="check">
+            <input id="encrypt" type="checkbox">
+            <span>Encrypt the connection (TLS)<small id="encrypt-hint"></small></span>
+          </label>
+          <label id="verify-option" class="check">
+            <input id="verify-certificate" type="checkbox">
+            <span>Verify the server's certificate<small>Turn this off only for a self-signed certificate you trust.</small></span>
+          </label>
+          <label id="sysdba-option" class="check">
+            <input id="sysdba" type="checkbox">
+            <span>Connect as SYSDBA<small>Needed for the SYS user.</small></span>
+          </label>
+
+          <p id="security-warning" class="notice warn" hidden></p>
+          <p id="connect-error" class="form-error" role="alert" hidden></p>
+          <button id="connect-button" class="btn primary wide" type="submit">Connect</button>
+        </div>
+      </form>
+    </div>
+  </main>
+
+  <div id="app-view" class="app-view" hidden>
+    <header class="topbar">
+      <span class="brand">DB AutoRun</span>
+      <div class="target">
+        <span id="target-location" class="badge"></span>
+        <strong id="target-type"></strong>
+        <span id="target-detail" class="mono"></span>
+        <span id="target-version" class="muted target-version"></span>
+      </div>
+      <button id="disconnect" class="btn" type="button">Disconnect</button>
+    </header>
+
+    <div class="workspace">
+      <section id="scripts-panel" class="panel" aria-labelledby="scripts-title">
+        <div class="panel-head">
+          <h2 id="scripts-title">Scripts <span id="script-count" class="count"></span></h2>
+          <div class="actions">
+            <button id="add-files" class="btn" type="button">Add files</button>
+            <button id="add-folder" class="btn" type="button">Add folder</button>
+            <button id="paste" class="btn" type="button">Paste</button>
+          </div>
+        </div>
+        <input id="file-input" type="file" multiple hidden>
+        <input id="folder-input" type="file" webkitdirectory multiple hidden>
+
+        <p id="add-notice" class="notice" role="status" hidden></p>
+
+        <div id="queue-empty" class="empty">
+          <strong>Drag and drop or paste your scripts here</strong>
+          <span>Drag in files or folders, or press Ctrl+V to paste copied files or SQL text. You can also use the buttons above, and add as many folders as you need.</span>
+        </div>
+        <div id="queue" class="queue"></div>
+
+        <div id="queue-foot" class="panel-foot" hidden>
+          <span class="muted">Scripts run from top to bottom. Drop or paste to add more.</span>
+          <button id="clear-all" class="link" type="button">Remove all</button>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="run-title">
+        <div class="panel-head">
+          <h2 id="run-title">Run</h2>
+          <button id="save-log" class="btn" type="button" hidden>Save log</button>
+        </div>
+
+        <div class="run-options">
+          <div class="field">
+            <label for="on-error">If a statement fails</label>
+            <select id="on-error">
+              <option value="stop">Stop the whole run</option>
+              <option value="next">Skip the rest of that file, go to the next file</option>
+              <option value="continue">Continue with the next statement</option>
+            </select>
+          </div>
+          <label class="check">
+            <input id="use-transaction" type="checkbox">
+            <span>Run each file in a transaction<small id="transaction-hint"></small></span>
+          </label>
+        </div>
+
+        <div class="run-actions">
+          <button id="run-remaining" class="btn primary" type="button" hidden></button>
+          <button id="run-all" class="btn primary" type="button" disabled>Run scripts</button>
+          <button id="stop" class="btn danger" type="button" hidden>Stop</button>
+        </div>
+
+        <div id="run-status" class="run-status" role="status" hidden>
+          <p id="run-summary"></p>
+          <progress id="run-progress" hidden></progress>
+        </div>
+
+        <div id="log" class="log"></div>
+      </section>
+    </div>
+  </div>
+
+  <dialog id="confirm-dialog" class="dialog" aria-labelledby="confirm-title">
+    <h2 id="confirm-title"></h2>
+    <dl class="confirm-details">
+      <dt>Where</dt><dd id="confirm-location"></dd>
+      <dt>Server</dt><dd id="confirm-target" class="mono"></dd>
+      <dt>If a statement fails</dt><dd id="confirm-on-error"></dd>
+      <dt>Transaction</dt><dd id="confirm-transaction"></dd>
+    </dl>
+    <p id="confirm-warning" class="notice warn" hidden></p>
+    <div class="dialog-actions">
+      <button id="confirm-cancel" class="btn" type="button" autofocus>Cancel</button>
+      <button id="confirm-run" class="btn primary" type="button"></button>
+    </div>
+  </dialog>
+
+</body>
+</html>
