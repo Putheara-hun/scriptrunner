@@ -400,7 +400,15 @@ function restoreConnectionForm() {
   applyLocation();
   fetch('/api/info')
     .then((response) => response.json())
-    .then((info) => { isPublicHost = Boolean(info.public); updateLocalHelp(); })
+    .then((info) => {
+      isPublicHost = Boolean(info.public);
+      if (!isPublicHost) {
+        document.querySelector('input[name="location"][value="local"]').checked = true;
+        $('location-choice').hidden = true;
+        applyLocation();
+      }
+      updateLocalHelp();
+    })
     .catch(() => {});
 }
 
