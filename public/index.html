@@ -30,6 +30,21 @@
           </div>
         </fieldset>
 
+        <div id="local-run-help" class="run-help" hidden>
+          <strong>Run DB AutoRun on your own computer</strong>
+          <p>This website runs on a server, so it can't reach a database on your computer. To use your local databases, run it on your PC (Windows or Mac) — no install, just one command:</p>
+          <div class="cmd-row">
+            <code id="npx-cmd">npx dbautorun</code>
+            <button type="button" id="copy-cmd" class="btn">Copy</button>
+          </div>
+          <ol class="run-steps">
+            <li><strong>Windows:</strong> open the Start menu, type <code>cmd</code>, press Enter. &nbsp;<strong>Mac:</strong> open <strong>Terminal</strong> (press Cmd+Space, type Terminal).</li>
+            <li>Paste the command above and press Enter. The first run sets itself up automatically.</li>
+            <li>Open the address it shows (<code>http://localhost:5757</code>) and choose "This computer".</li>
+          </ol>
+          <p class="muted">No Node.js yet? <a href="https://nodejs.org" target="_blank" rel="noopener noreferrer">Download it free (Windows &amp; Mac)</a>.</p>
+        </div>
+
         <div class="field">
           <label id="db-type-label">Database type</label>
           <div class="custom-select" id="db-select">

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import http from 'node:http';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -262,6 +263,8 @@ async function route(req, res) {
     await serveLogo(res, pathname);
   } else if (req.method === 'GET' && pathname === '/api/usage') {
     sendJson(res, 200, usage.totals());
+  } else if (req.method === 'GET' && pathname === '/api/info') {
+    sendJson(res, 200, { public: IS_PUBLIC });
   } else if (req.method === 'POST' && pathname === '/api/connect') {
     await handleConnect(req, res);
   } else if (req.method === 'POST' && pathname === '/api/run') {
@@ -322,10 +325,13 @@ function listen(port, attemptsLeft) {
       console.log(`Used so far: ${users} users, ${runs} runs, ${scripts} scripts.`);
     } else {
       const url = `http://localhost:${port}`;
-      console.log(`DB AutoRun is running at ${url}`);
-      console.log(`Used so far: ${users} users, ${runs} runs, ${scripts} scripts.`);
-      console.log('Close this window to stop it.');
-      if (process.argv.includes('--open')) openBrowser(url);
+      console.log('');
+      console.log(`  DB AutoRun is running. Open this in your browser:`);
+      console.log(`  ${url}`);
+      console.log('');
+      console.log(`  Used so far: ${users} users, ${runs} runs, ${scripts} scripts.`);
+      console.log('  Keep this window open while you use it. Press Ctrl+C to stop.');
+      if (!process.argv.includes('--no-open')) openBrowser(url);
     }
   };
   const onError = (error) => {

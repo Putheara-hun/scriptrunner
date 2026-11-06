@@ -368,6 +368,13 @@ function updateSecurityOptions() {
   $('security-warning').hidden = !warning;
 }
 
+let isPublicHost = false;
+
+function updateLocalHelp() {
+  const help = $('local-run-help');
+  if (help) help.hidden = !(isPublicHost && selectedLocation() === 'local');
+}
+
 function applyLocation() {
   const location = selectedLocation();
   const type = readStorage(`dbautorun.lastType.${location}`) ?? $('db-type').value;
@@ -379,6 +386,7 @@ function applyLocation() {
     $('connection-fields').hidden = true;
   }
   dbSelect?.syncButton();
+  updateLocalHelp();
 }
 
 function restoreConnectionForm() {
@@ -387,6 +395,10 @@ function restoreConnectionForm() {
     document.querySelector(`input[name="location"][value="${lastLocation}"]`).checked = true;
   }
   applyLocation();
+  fetch('/api/info')
+    .then((response) => response.json())
+    .then((info) => { isPublicHost = Boolean(info.public); updateLocalHelp(); })
+    .catch(() => {});
 }
 
 function showConnectError(message) {
@@ -1288,6 +1300,21 @@ $('db-type').addEventListener('change', (event) => {
 for (const radio of document.querySelectorAll('input[name="location"]')) {
   radio.addEventListener('change', applyLocation);
 }
+$('copy-cmd')?.addEventListener('click', async () => {
+  const button = $('copy-cmd');
+  try {
+    await navigator.clipboard.writeText('npx dbautorun');
+    const original = button.textContent;
+    button.textContent = 'Copied';
+    setTimeout(() => { button.textContent = original; }, 1500);
+  } catch {
+    const range = document.createRange();
+    range.selectNodeContents($('npx-cmd'));
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+});
 $('encrypt').addEventListener('change', updateSecurityOptions);
 $('verify-certificate').addEventListener('change', updateSecurityOptions);
 $('connect-form').addEventListener('submit', submitConnection);
