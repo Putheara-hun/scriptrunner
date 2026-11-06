@@ -371,8 +371,11 @@ function updateSecurityOptions() {
 let isPublicHost = false;
 
 function updateLocalHelp() {
+  const onlyHelp = isPublicHost && selectedLocation() === 'local';
   const help = $('local-run-help');
-  if (help) help.hidden = !(isPublicHost && selectedLocation() === 'local');
+  if (help) help.hidden = !onlyHelp;
+  $('db-type-field').hidden = onlyHelp;
+  if (onlyHelp) $('connection-fields').hidden = true;
 }
 
 function applyLocation() {
