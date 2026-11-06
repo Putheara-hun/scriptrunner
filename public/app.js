@@ -43,7 +43,7 @@ const DB_TYPES = {
 };
 
 const LOCATIONS = {
-  local: { label: 'This computer', badge: 'Local' },
+  local: { label: 'Local run', badge: 'Local' },
   internet: { label: 'Over the internet', badge: 'Internet' },
 };
 
