@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: scriptrunner
+    name: dbautorun
     runtime: node
     plan: free
     buildCommand: npm install --omit=dev
