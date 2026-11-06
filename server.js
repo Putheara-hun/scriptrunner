@@ -7,13 +7,25 @@ import { fileURLToPath } from 'node:url';
 import { describeConnectionFailure, isSupportedType, openConnection } from './lib/drivers/index.js';
 import { runScript } from './lib/runner.js';
 import { createUsageCounter } from './lib/usage.js';
+import { resolveSafely } from './lib/netguard.js';
+import { createRateLimiter } from './lib/ratelimit.js';
+
+const IS_PUBLIC = (process.env.APP_MODE || (process.env.RENDER ? 'public' : 'local')).toLowerCase() === 'public';
+const PUBLIC_HOST = (process.env.PUBLIC_HOST || process.env.RENDER_EXTERNAL_HOSTNAME || '').trim();
+const PUBLIC_ORIGIN = PUBLIC_HOST ? `https://${PUBLIC_HOST}` : '';
+const BIND_HOST = IS_PUBLIC ? '0.0.0.0' : '127.0.0.1';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const usage = createUsageCounter(path.join(process.env.DATA_DIR || path.join(ROOT, 'data'), 'usage.json'));
 const FIRST_PORT = Number(process.env.PORT) || 5757;
-const PORT_ATTEMPTS = 10;
+const PORT_ATTEMPTS = IS_PUBLIC ? 1 : 10;
 const MAX_JSON_BYTES = 64 * 1024;
-const MAX_SCRIPT_BYTES = 500 * 1024 * 1024; // close to the longest string Node can hold
+const MAX_SCRIPT_BYTES = (IS_PUBLIC ? 5 : 500) * 1024 * 1024;
+const STATEMENT_TIMEOUT_MS = IS_PUBLIC ? 60000 : 0;
+const SESSION_IDLE_MS = 30 * 60 * 1000;
+const MAX_SESSIONS = 500;
+
+const connectLimiter = IS_PUBLIC ? createRateLimiter({ windowMs: 60000, max: 15 }) : null;
 
 const STATIC_FILES = {
   '/': ['public/index.html', 'text/html; charset=utf-8'],
@@ -22,9 +34,6 @@ const STATIC_FILES = {
   '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'],
 };
 
-// Database logos live in public/logos. They are served only through <img>, so a
-// browser never runs anything inside them. Drop in your own file with the same
-// name to change a logo.
 const LOGO_DIR = path.join(ROOT, 'public', 'logos');
 const LOGO_TYPES = { '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp' };
 
@@ -35,8 +44,6 @@ const SECURITY_HEADERS = {
   'Cache-Control': 'no-store',
 };
 
-// Connection details, including the password, stay in this process's memory
-// only. Each file opens its own connection, so the password is needed all run.
 const sessions = new Map();
 let listeningPort = FIRST_PORT;
 
@@ -79,18 +86,34 @@ async function readJson(req) {
   }
 }
 
-// The server only listens on this machine, but any web page open in a browser
-// can still send requests to localhost. These two checks shut that out.
 function isTrustedRequest(req) {
+  if (IS_PUBLIC) {
+    if (req.method === 'GET') return true;
+    const origin = req.headers.origin;
+    if (!origin) return false;
+    if (PUBLIC_ORIGIN) return origin === PUBLIC_ORIGIN;
+    try {
+      return new URL(origin).host === req.headers.host;
+    } catch {
+      return false;
+    }
+  }
   const hosts = [`127.0.0.1:${listeningPort}`, `localhost:${listeningPort}`];
   if (!hosts.includes(req.headers.host)) return false;
   const origin = req.headers.origin;
   return !origin || hosts.some((host) => origin === `http://${host}`);
 }
 
+function clientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.length) return forwarded.split(',')[0].trim();
+  return req.socket.remoteAddress || 'unknown';
+}
+
 function requireSession(req) {
   const session = sessions.get(req.headers['x-session']);
   if (!session) throw new RequestError(401, 'This connection has ended. Connect again.');
+  session.lastUsed = Date.now();
   return session;
 }
 
@@ -125,14 +148,45 @@ function parseConnectionForm(form) {
   };
 }
 
+function hostToResolve(config) {
+  if (config.type === 'mssql') return config.server.split(',')[0].split('\\')[0].trim();
+  return config.server;
+}
+
 async function handleConnect(req, res) {
+  if (connectLimiter) {
+    const { allowed, retryAfterMs } = connectLimiter.check(clientIp(req));
+    if (!allowed) {
+      const seconds = Math.ceil(retryAfterMs / 1000);
+      res.writeHead(429, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8', 'Retry-After': String(seconds) });
+      res.end(JSON.stringify({ error: `Too many connection attempts. Wait ${seconds} seconds and try again.` }));
+      return;
+    }
+  }
+
   const config = parseConnectionForm(await readJson(req));
+
+  if (IS_PUBLIC) {
+    if (sessions.size >= MAX_SESSIONS) {
+      sendJson(res, 503, { error: 'The server is busy right now. Try again in a few minutes.' });
+      return;
+    }
+    try {
+
+      config.resolvedHost = await resolveSafely(hostToResolve(config));
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+      return;
+    }
+    config.statementTimeoutMs = STATEMENT_TIMEOUT_MS;
+  }
+
   let connection;
   try {
     connection = await openConnection(config);
     const version = await connection.version();
     const token = randomUUID();
-    sessions.set(token, { config, stoppedRunId: null });
+    sessions.set(token, { config, stoppedRunId: null, lastUsed: Date.now() });
     sendJson(res, 200, { token, version });
   } catch (error) {
     sendJson(res, 400, { error: describeConnectionFailure(error, config) });
@@ -146,14 +200,12 @@ async function handleRun(req, res, url) {
   const runId = url.searchParams.get('runId');
   const bytes = await readBody(req, MAX_SCRIPT_BYTES);
 
-  // A run sends one request per script, so only its first request counts as a run.
   const isNewRun = session.countedRunId !== runId;
   session.countedRunId = runId;
   usage.recordScript({ newRun: isNewRun, newUser: isNewRun && url.searchParams.get('newUser') === '1' });
 
   res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'application/x-ndjson; charset=utf-8' });
 
-  // A closed browser tab counts as a stop request.
   let clientGone = false;
   res.on('close', () => {
     clientGone = true;
@@ -182,8 +234,7 @@ async function serveStatic(res, pathname) {
 async function serveLogo(res, pathname) {
   const name = pathname.slice('/logos/'.length);
   const ext = path.extname(name).toLowerCase();
-  // Only a plain filename with a known image extension, so nothing outside the
-  // logos folder can be reached.
+
   if (!/^[a-z0-9_-]+$/i.test(path.basename(name, ext)) || !Object.hasOwn(LOGO_TYPES, ext)) {
     sendJson(res, 404, { error: 'Not found.' });
     return;
@@ -236,26 +287,46 @@ const server = http.createServer((req, res) => {
   });
 });
 
-// Scripts can run for hours, and the response stays open that whole time.
 server.requestTimeout = 0;
 server.timeout = 0;
 
 function openBrowser(url) {
-  spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' }).unref();
+  if (process.platform !== 'win32') return;
+  try {
+    const child = spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' });
+    child.on('error', () => {});
+    child.unref();
+  } catch {
+
+  }
+}
+
+if (IS_PUBLIC) {
+  setInterval(() => {
+    const cutoff = Date.now() - SESSION_IDLE_MS;
+    for (const [token, session] of sessions) {
+      if (session.lastUsed < cutoff) sessions.delete(token);
+    }
+    connectLimiter?.prune();
+  }, 60000).unref();
 }
 
 function listen(port, attemptsLeft) {
-  // Each handler removes the other, so a failed attempt on one port leaves
-  // nothing behind to fire when a later attempt succeeds.
+
   const onListening = () => {
     server.off('error', onError);
     listeningPort = port;
-    const url = `http://localhost:${port}`;
     const { users, runs, scripts } = usage.totals();
-    console.log(`DB AutoRun is running at ${url}`);
-    console.log(`Used so far: ${users} users, ${runs} runs, ${scripts} scripts.`);
-    console.log('Close this window to stop it.');
-    if (process.argv.includes('--open')) openBrowser(url);
+    if (IS_PUBLIC) {
+      console.log(`DB AutoRun (public mode) is listening on ${BIND_HOST}:${port}${PUBLIC_HOST ? ` for ${PUBLIC_HOST}` : ''}`);
+      console.log(`Used so far: ${users} users, ${runs} runs, ${scripts} scripts.`);
+    } else {
+      const url = `http://localhost:${port}`;
+      console.log(`DB AutoRun is running at ${url}`);
+      console.log(`Used so far: ${users} users, ${runs} runs, ${scripts} scripts.`);
+      console.log('Close this window to stop it.');
+      if (process.argv.includes('--open')) openBrowser(url);
+    }
   };
   const onError = (error) => {
     server.off('listening', onListening);
@@ -268,8 +339,7 @@ function listen(port, attemptsLeft) {
   };
   server.once('listening', onListening);
   server.once('error', onError);
-  // Only reachable from this computer, never from the network.
-  server.listen(port, '127.0.0.1');
+  server.listen(port, BIND_HOST);
 }
 
 listen(FIRST_PORT, PORT_ATTEMPTS);

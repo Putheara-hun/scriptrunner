@@ -1,10 +1,3 @@
-// Exercises the database adapters without needing the servers installed.
-// MySQL talks real protocol to mysql2's built-in server. SQL Server and Oracle
-// use stand-ins shaped like the real drivers, so these tests catch mistakes in
-// our own code, but they do not prove compatibility with a live server.
-//
-// mysql2's test server numbers some packets oddly, so a few harmless "packets
-// out of order" warnings appear while these run.
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import mysql from 'mysql2';
@@ -92,6 +85,16 @@ test('connection failures explain what to check, and keep the original message',
   assert.match(explain('Failed to connect to db1:1433 in 15000ms', 'ETIMEOUT'), /firewall/);
   assert.match(explain('self-signed certificate', 'DEPTH_ZERO_SELF_SIGNED_CERT'), /Verify the server's certificate/);
   assert.equal(explain('password authentication failed for user "app"'), 'password authentication failed for user "app"');
+});
+
+test('public mode: drivers connect to the vetted address and apply a query timeout', async () => {
+
+  await openMssql({ server: 'db.example.com', port: 1433, user: 'sa', password: 'x', resolvedHost: '93.184.216.34', statementTimeoutMs: 60000 });
+  assert.equal(FakePool.last.config.server, '93.184.216.34');
+  assert.equal(FakePool.last.config.requestTimeout, 60000);
+
+  await openOracle({ server: 'ora.example.com', port: 1521, database: 'S', user: 'u', password: 'x', resolvedHost: '93.184.216.34' });
+  assert.equal(oracleState.config.connectString, '93.184.216.34:1521/S');
 });
 
 test('certificate checking and TCPS follow the form', async () => {
@@ -228,10 +231,10 @@ function startMysqlServer(onQuery) {
       connectionId: 1,
       statusFlags: 2,
       characterSet: 33,
-      capabilityFlags: 0xffffff ^ 0x800 ^ 0x20, // no TLS, no compression
+      capabilityFlags: 0xffffff ^ 0x800 ^ 0x20,
     });
     connection.on('query', (sql) => {
-      connection.sequenceId = 1; // packet numbering restarts with each command
+      connection.sequenceId = 1;
       onQuery(sql, connection);
     });
   });

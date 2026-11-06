@@ -66,7 +66,6 @@ test('a failed save does not stop the run', (context) => {
     const blocker = path.join(folder, 'a-file');
     writeFileSync(blocker, '');
 
-    // The parent "folder" is really a file, so saving cannot work.
     const usage = createUsageCounter(path.join(blocker, 'usage.json'));
     assert.doesNotThrow(() => usage.recordScript({ newRun: true, newUser: true }));
     assert.equal(usage.totals().users, 1);

@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: scriptrunner
+    runtime: node
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /
+    envVars:
+      - key: APP_MODE
+        value: public

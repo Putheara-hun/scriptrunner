@@ -67,8 +67,6 @@ const STATUS_LABELS = {
   skipped: 'Not run',
 };
 
-// Set once this browser has run something, so the server can count each user
-// once without storing anything that identifies them.
 const COUNTED_KEY = 'dbautorun.counted';
 
 const LOOSE_GROUP_NAME = 'Individual files';
@@ -93,8 +91,6 @@ const state = {
   nextId: 1,
   pasteCount: 0,
 };
-
-/* ---------- Small helpers ---------- */
 
 function el(tag, attributes = {}, ...children) {
   const node = document.createElement(tag);
@@ -138,7 +134,7 @@ function writeStorage(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    // Remembering the form is only a convenience.
+
   }
 }
 
@@ -170,10 +166,6 @@ function resetResult(file) {
   });
 }
 
-/* ---------- Connection screen ---------- */
-
-// Each database shows its real logo from /logos. If a logo file is ever missing,
-// the image quietly falls back to this brand-coloured badge drawn inline.
 const DB_BADGE = { mssql: '#cc2927', oracle: '#c74634', postgres: '#336791', mysql: '#00758f' };
 
 function dbBadge(type) {
@@ -203,9 +195,6 @@ function dbMark(type) {
 
 let dbSelect = null;
 
-// Replaces the native <select> with a dropdown that can show an icon per item.
-// The hidden <select> stays the source of truth, so the rest of the form is
-// unchanged: it still reads $('db-type').value and listens for its change event.
 function setUpDbSelect() {
   const select = $('db-type');
   const button = $('db-type-button');
@@ -262,7 +251,7 @@ function setUpDbSelect() {
     const changed = select.value !== value;
     select.value = value;
     syncButton();
-    close(!changed); // when it changed, the change handler moves focus to the server field
+    close(!changed);
     if (changed) select.dispatchEvent(new Event('change'));
   }
 
@@ -379,8 +368,6 @@ function updateSecurityOptions() {
   $('security-warning').hidden = !warning;
 }
 
-// Each choice remembers its own database type, and keeps the current type if it
-// has none of its own yet.
 function applyLocation() {
   const location = selectedLocation();
   const type = readStorage(`dbautorun.lastType.${location}`) ?? $('db-type').value;
@@ -440,7 +427,6 @@ async function submitConnection(event) {
       return;
     }
 
-    // Everything except the password is remembered for next time.
     const { password, ...remembered } = form;
     writeStorage(profileKey(location, type), remembered);
     writeStorage(`dbautorun.lastType.${location}`, type);
@@ -496,8 +482,6 @@ async function disconnect() {
   }
 }
 
-/* ---------- Adding scripts ---------- */
-
 function comparePaths(a, b) {
   const left = a.relPath.split('/');
   const right = b.relPath.split('/');
@@ -530,8 +514,6 @@ function addEntries(entries) {
       state.groups.push(group);
     }
 
-    // Adding the same path again updates it in place, so nothing runs twice and
-    // a corrected script can be picked up without losing its position.
     const existing = group.files.find((candidate) => candidate.relPath === relPath);
     if (existing) {
       const changed = existing.file.size !== file.size || existing.file.lastModified !== file.lastModified;
@@ -586,7 +568,6 @@ function readEntryFile(entry) {
   return new Promise((resolve, reject) => entry.file(resolve, reject));
 }
 
-// readEntries returns its results in batches and has to be called until empty.
 async function readDirectory(directory) {
   const reader = directory.createReader();
   const children = [];
@@ -605,9 +586,6 @@ async function walkDirectory(directory, groupName, prefix, output) {
   }
 }
 
-// Drag and paste items stop being readable after the first await, so everything
-// is taken from them up front. The plain file is the fallback for when a browser
-// offers no folder view of the item, which can happen with pasted files.
 function readTransferItems(items) {
   return [...items]
     .filter((item) => item.kind === 'file')
@@ -635,7 +613,6 @@ function addFromDrop(dataTransfer) {
   return addTransferred(readTransferItems(dataTransfer.items));
 }
 
-// "Copy as path" in Explorer gives text, and a browser cannot open a path.
 function isOnlyFilePaths(text) {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   return lines.every((line) => /^"?(?:[a-zA-Z]:\\|\\\\)[^"]*"?$/.test(line));
@@ -647,7 +624,6 @@ function addPastedText(text) {
     return;
   }
 
-  // Pasting the same text twice by accident must not run it twice.
   const existing = allFiles().find((file) => file.pastedText === text);
   if (!existing) {
     state.pasteCount++;
@@ -670,7 +646,6 @@ async function addFromPaste(clipboard) {
   const text = clipboard.getData('text/plain');
   const fileItems = [...clipboard.items].filter((item) => item.kind === 'file');
 
-  // Word and Excel put a picture of the content beside copied text.
   const pictureBesideText = text.trim() && fileItems.every((item) => item.type.startsWith('image/'));
 
   if (fileItems.length && !pictureBesideText) {
@@ -685,8 +660,6 @@ async function addFromPaste(clipboard) {
   }
 }
 
-// The Paste button can only read text. Browsers give pages copied files only
-// through a real paste, which is Ctrl+V.
 async function pasteFromButton() {
   try {
     const text = await navigator.clipboard.readText();
@@ -701,7 +674,6 @@ function setUpDropZone() {
   const panel = $('scripts-panel');
   let depth = 0;
 
-  // Dropping anywhere else must not navigate away and lose the list.
   for (const type of ['dragover', 'drop']) {
     window.addEventListener(type, (event) => event.preventDefault());
   }
@@ -719,8 +691,6 @@ function setUpDropZone() {
     if (!state.running) addFromDrop(event.dataTransfer);
   });
 }
-
-/* ---------- Reordering ---------- */
 
 function move(list, item, offset) {
   const from = list.indexOf(item);
@@ -742,8 +712,6 @@ function removeGroup(group) {
   state.groups.splice(state.groups.indexOf(group), 1);
   if (!state.groups.length) state.lastRun = null;
 }
-
-/* ---------- Running ---------- */
 
 function askToConfirm(files) {
   const { session } = state;
@@ -916,8 +884,6 @@ async function requestStop() {
     body: JSON.stringify({ runId: state.runId }),
   }).catch(() => {});
 }
-
-/* ---------- Rendering ---------- */
 
 let renderTimer = null;
 
@@ -1256,7 +1222,7 @@ function renderLog() {
       `${plural(trimmedCount, 'earlier successful statement')} not shown. Save the log to see more.`,
     ));
   }
-  // Pasted text has no file to open, so this is the only place to check it.
+
   if (file.pastedText && file.status === 'idle') {
     const isCut = file.pastedText.length > MAX_PASTE_PREVIEW;
     sections.push(el('pre', { class: 'pasted-preview' },
@@ -1268,8 +1234,6 @@ function renderLog() {
 
   if (state.running && stickToBottom) log.scrollTop = log.scrollHeight;
 }
-
-/* ---------- Saving the log ---------- */
 
 function buildLogText() {
   const { session } = state;
@@ -1317,8 +1281,6 @@ function saveLog() {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
-/* ---------- Wiring ---------- */
-
 $('db-type').addEventListener('change', (event) => {
   showConnectionFields(event.target.value);
   $('server').focus();
@@ -1343,7 +1305,7 @@ $('file-input').accept = [...SCRIPT_EXTENSIONS].map((extension) => `.${extension
 for (const [inputId, handler] of [['file-input', addFromFilePicker], ['folder-input', addFromFolderPicker]]) {
   $(inputId).addEventListener('change', (event) => {
     handler(event.target.files);
-    event.target.value = ''; // so choosing the same folder again fires a change
+    event.target.value = '';
   });
 }
 $('clear-all').addEventListener('click', () => {

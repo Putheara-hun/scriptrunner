@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "node server.js --open",
+    "start": "node server.js",
     "test": "node --test --experimental-test-module-mocks"
   },
   "dependencies": {
