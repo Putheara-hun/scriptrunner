@@ -10,6 +10,7 @@ import { runScript } from './lib/runner.js';
 import { createUsageCounter } from './lib/usage.js';
 import { resolveSafely } from './lib/netguard.js';
 import { createRateLimiter } from './lib/ratelimit.js';
+import { dumpDatabase } from './lib/backup.js';
 
 const IS_PUBLIC = (process.env.APP_MODE || (process.env.RENDER ? 'public' : 'local')).toLowerCase() === 'public';
 const PUBLIC_HOST = (process.env.PUBLIC_HOST || process.env.RENDER_EXTERNAL_HOSTNAME || '').trim();
@@ -225,6 +226,32 @@ async function handleRun(req, res, url) {
   res.end();
 }
 
+async function handleBackup(req, res) {
+  const session = requireSession(req);
+  let connection;
+  try {
+    connection = await openConnection(session.config);
+    if (!connection.introspect) {
+      sendJson(res, 400, { error: 'Backup is not available for this database type yet.' });
+      return;
+    }
+    const base = (session.config.database || session.config.type).replace(/[^\w.-]/g, '_');
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
+    res.writeHead(200, {
+      ...SECURITY_HEADERS,
+      'Content-Type': 'application/sql; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${base}-backup-${stamp}.sql"`,
+    });
+    await dumpDatabase(connection.introspect, (chunk) => res.write(chunk), { database: session.config.database });
+    res.end();
+  } catch (error) {
+    if (res.headersSent) res.end(`\n-- BACKUP FAILED: ${error.message}\n`);
+    else sendJson(res, 400, { error: `Backup failed: ${describeConnectionFailure(error, session.config)}` });
+  } finally {
+    await connection?.close().catch(() => {});
+  }
+}
+
 async function serveStatic(res, pathname) {
   const [file, contentType] = STATIC_FILES[pathname];
   const content = await readFile(path.join(ROOT, file));
@@ -269,6 +296,8 @@ async function route(req, res) {
     await handleConnect(req, res);
   } else if (req.method === 'POST' && pathname === '/api/run') {
     await handleRun(req, res, url);
+  } else if (req.method === 'POST' && pathname === '/api/backup') {
+    await handleBackup(req, res);
   } else if (req.method === 'POST' && pathname === '/api/stop') {
     const session = requireSession(req);
     session.stoppedRunId = (await readJson(req)).runId;

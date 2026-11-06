@@ -1041,6 +1041,8 @@ function renderQueue() {
   $('add-files').disabled = locked;
   $('add-folder').disabled = locked;
   $('paste').disabled = locked;
+  $('backup').disabled = locked;
+  $('restore').disabled = locked;
   $('disconnect').disabled = locked;
 }
 
@@ -1293,6 +1295,38 @@ function saveLog() {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
+async function backupDatabase() {
+  const button = $('backup');
+  if (button.disabled) return;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Backing up…';
+  try {
+    const response = await fetch('/api/backup', { method: 'POST', headers: { 'X-Session': state.session.token } });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      showAddNotice(body.error ?? 'Backup failed.');
+      return;
+    }
+    const disposition = response.headers.get('Content-Disposition') ?? '';
+    const named = /filename="([^"]+)"/.exec(disposition);
+    const filename = named ? named[1] : 'backup.sql';
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = el('a', { href: url, download: filename });
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    showAddNotice(`Backup saved as ${filename}. To restore it later, use Restore (or Add files) and Run.`);
+  } catch {
+    showAddNotice('Lost contact with the server during the backup.');
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+$('backup').addEventListener('click', backupDatabase);
+$('restore').addEventListener('click', () => $('file-input').click());
 $('db-type').addEventListener('change', (event) => {
   showConnectionFields(event.target.value);
   $('server').focus();
