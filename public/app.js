@@ -1237,6 +1237,25 @@ function lineLabel(line) {
   return line ? `Line ${line.toLocaleString()}` : 'File';
 }
 
+function resultTable(entry) {
+  const header = el('tr', {}, ...entry.columns.map((name) => el('th', {}, name)));
+  const body = entry.data.map((row) =>
+    el('tr', {}, ...row.map((cell) =>
+      cell === null ? el('td', { class: 'cell-null' }, 'NULL') : el('td', { title: String(cell) }, String(cell)),
+    )),
+  );
+  const table = el('table', { class: 'result-table' }, el('thead', {}, header), el('tbody', {}, ...body));
+  const block = el('div', { class: 'result-block' }, el('div', { class: 'result-scroll' }, table));
+  if (entry.rows > entry.data.length || entry.more) {
+    block.append(el('div', { class: 'result-more' },
+      `Showing the first ${entry.data.length.toLocaleString()} of ${entry.rows.toLocaleString()}${entry.more ? '+' : ''} rows.`,
+    ));
+  } else if (entry.data.length === 0) {
+    block.append(el('div', { class: 'result-more' }, 'No rows returned.'));
+  }
+  return block;
+}
+
 function renderEntry(entry) {
   const messages = entry.messages?.length ? el('pre', {}, entry.messages.join('\n')) : null;
 
@@ -1266,13 +1285,15 @@ function renderEntry(entry) {
     );
   }
 
+  const hasTable = Boolean(entry.columns && entry.data);
   return el('li', { class: `entry${entry.status === 'warning' ? ' is-warning' : ''}` },
     el('span', { class: 'entry-line' }, lineLabel(entry.line)),
     el('span', { class: 'entry-sql', title: entry.preview }, entry.preview),
     el('span', { class: 'entry-meta' }, resultText(entry)),
-    (entry.warning || messages) && el('div', { class: 'entry-body' },
+    (entry.warning || messages || hasTable) && el('div', { class: 'entry-body' },
       entry.warning && el('div', { class: 'note-text' }, entry.warning),
       messages,
+      hasTable && resultTable(entry),
     ),
   );
 }
@@ -1371,6 +1392,12 @@ function buildLogText() {
       } else {
         lines.push(`   ${at}: ${entry.status === 'warning' ? 'WARNING' : 'OK'} ${entry.preview} (${resultText(entry)})`);
         if (entry.warning) lines.push(`      ${entry.warning}`);
+        if (entry.columns && entry.data) {
+          lines.push(`      ${entry.columns.join('\t')}`);
+          for (const row of entry.data) {
+            lines.push(`      ${row.map((cell) => (cell === null ? 'NULL' : String(cell).replace(/\t/g, ' '))).join('\t')}`);
+          }
+        }
       }
       for (const message of entry.messages ?? []) lines.push(`      > ${message}`);
     }

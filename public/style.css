@@ -546,6 +546,43 @@ progress { display: block; width: 100%; height: 6px; margin-top: 8px; accent-col
 
 .log-trimmed { padding: 8px 14px; color: var(--muted); font-size: 12.5px; border-bottom: 1px solid var(--border); }
 
+.result-block { margin-top: 6px; }
+.result-scroll {
+  max-height: 340px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.result-table {
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 12px;
+  width: max-content;
+  min-width: 100%;
+}
+.result-table th,
+.result-table td {
+  padding: 3px 9px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.result-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-2);
+  font-weight: 600;
+}
+.result-table tbody tr:hover { background: var(--surface-2); }
+.result-table .cell-null { color: var(--muted); font-style: italic; }
+.result-more { margin-top: 4px; color: var(--muted); font-size: 12px; }
+
 .dialog {
   width: min(480px, calc(100vw - 32px));
   padding: 22px;
