@@ -254,7 +254,10 @@ async function handleBackup(req, res) {
 
 async function serveStatic(res, pathname) {
   const [file, contentType] = STATIC_FILES[pathname];
-  const content = await readFile(path.join(ROOT, file));
+  let content = await readFile(path.join(ROOT, file));
+  if (pathname === '/') {
+    content = content.toString('utf8').replace('__APP_PUBLIC__', IS_PUBLIC ? 'true' : 'false');
+  }
   res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': contentType });
   res.end(content);
 }

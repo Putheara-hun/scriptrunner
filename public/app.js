@@ -90,6 +90,8 @@ const state = {
   currentFile: null,
   nextId: 1,
   pasteCount: 0,
+  writtenCount: 0,
+  editing: null,
 };
 
 function el(tag, attributes = {}, ...children) {
@@ -368,7 +370,7 @@ function updateSecurityOptions() {
   $('security-warning').hidden = !warning;
 }
 
-let isPublicHost = false;
+let isPublicHost = document.body.dataset.public === 'true';
 
 function updateLocalHelp() {
   const onlyHelp = isPublicHost && selectedLocation() === 'local';
@@ -397,19 +399,11 @@ function restoreConnectionForm() {
   if (LOCATIONS[lastLocation]) {
     document.querySelector(`input[name="location"][value="${lastLocation}"]`).checked = true;
   }
+  if (!isPublicHost) {
+    document.querySelector('input[name="location"][value="local"]').checked = true;
+    $('location-choice').hidden = true;
+  }
   applyLocation();
-  fetch('/api/info')
-    .then((response) => response.json())
-    .then((info) => {
-      isPublicHost = Boolean(info.public);
-      if (!isPublicHost) {
-        document.querySelector('input[name="location"][value="local"]').checked = true;
-        $('location-choice').hidden = true;
-        applyLocation();
-      }
-      updateLocalHelp();
-    })
-    .catch(() => {});
 }
 
 function showConnectError(message) {
@@ -525,7 +519,7 @@ function addEntries(entries) {
   let ignored = 0;
   const touchedGroups = new Set();
 
-  for (const { file, groupName, relPath, pastedText } of entries) {
+  for (const { file, groupName, relPath, text } of entries) {
     if (!isScript(file.name)) {
       ignored++;
       continue;
@@ -548,7 +542,7 @@ function addEntries(entries) {
       continue;
     }
 
-    const entry = { id: state.nextId++, file, relPath, pastedText };
+    const entry = { id: state.nextId++, file, relPath, text };
     resetResult(entry);
     group.files.push(entry);
     touchedGroups.add(group);
@@ -647,21 +641,104 @@ function addPastedText(text) {
     return;
   }
 
-  const existing = allFiles().find((file) => file.pastedText === text);
+  const existing = allFiles().find((file) => file.text === text);
   if (!existing) {
     state.pasteCount++;
     const relPath = `pasted-${state.pasteCount}.sql`;
     const file = new File([text], relPath, { type: 'text/plain' });
-    addEntries([{ file, groupName: PASTED_GROUP_NAME, relPath, pastedText: text }]);
+    addEntries([{ file, groupName: PASTED_GROUP_NAME, relPath, text }]);
   }
 
-  const script = existing ?? allFiles().find((file) => file.pastedText === text);
+  const script = existing ?? allFiles().find((file) => file.text === text);
   state.selectedId = script.id;
   showAddNotice(
     existing
       ? `That text is already in the list as ${script.relPath}.`
       : `Added the pasted text as ${script.relPath}.`,
   );
+  render();
+}
+
+const WRITTEN_GROUP_NAME = 'Written SQL';
+const EDITOR_MAX_BYTES = 2 * 1024 * 1024;
+
+function scriptName(name) {
+  const trimmed = String(name).trim();
+  if (!trimmed) return '';
+  return /\.[a-z0-9]+$/i.test(trimmed) ? trimmed : `${trimmed}.sql`;
+}
+
+function decodeForEditor(bytes) {
+  const data = new Uint8Array(bytes);
+  if (data[0] === 0xff && data[1] === 0xfe) return new TextDecoder('utf-16le').decode(data);
+  if (data[0] === 0xfe && data[1] === 0xff) return new TextDecoder('utf-16be').decode(data);
+  return new TextDecoder('utf-8').decode(data);
+}
+
+function updateEditorCount() {
+  const length = $('editor-text').value.length;
+  $('editor-count').textContent = length ? `${length.toLocaleString()} characters` : '';
+}
+
+async function openEditor(script) {
+  if (script && typeof script.text !== 'string' && script.file.size > EDITOR_MAX_BYTES) {
+    showAddNotice(`${script.relPath} is too large to open in the editor.`);
+    return;
+  }
+  state.editing = script ?? null;
+  if (script) {
+    $('editor-title').textContent = `Edit ${script.relPath}`;
+    $('editor-name').value = script.relPath;
+    try {
+      $('editor-text').value =
+        typeof script.text === 'string' ? script.text : decodeForEditor(await script.file.arrayBuffer());
+    } catch {
+      state.editing = null;
+      showAddNotice('That file could not be opened for editing.');
+      return;
+    }
+  } else {
+    state.writtenCount++;
+    $('editor-title').textContent = 'New script';
+    $('editor-name').value = `script-${state.writtenCount}.sql`;
+    $('editor-text').value = '';
+  }
+  updateEditorCount();
+  $('editor-dialog').showModal();
+  $('editor-text').focus();
+}
+
+function saveEditor() {
+  const name = scriptName($('editor-name').value) || 'script.sql';
+  const text = $('editor-text').value;
+  if (!text.trim()) {
+    showAddNotice('Nothing to save — the script is empty.');
+    return;
+  }
+  const file = new File([text], name, { type: 'text/plain' });
+
+  if (state.editing) {
+    const script = state.editing;
+    script.relPath = name;
+    script.text = text;
+    script.file = file;
+    resetResult(script);
+    state.selectedId = script.id;
+    showAddNotice(`Saved ${name}.`);
+  } else {
+    let group = state.groups.find((candidate) => candidate.name === WRITTEN_GROUP_NAME);
+    if (!group) {
+      group = { id: state.nextId++, name: WRITTEN_GROUP_NAME, files: [], manualOrder: true };
+      state.groups.push(group);
+    }
+    const entry = { id: state.nextId++, file, relPath: name, text };
+    resetResult(entry);
+    group.files.push(entry);
+    state.selectedId = entry.id;
+    showAddNotice(`Added ${name}.`);
+  }
+  state.editing = null;
+  $('editor-dialog').close();
   render();
 }
 
@@ -927,6 +1004,7 @@ const ICON_PATHS = {
   up: 'M8 13V3M3.500 7.500 8 3l4.500 4.500',
   down: 'M8 3v10M3.500 8.500 8 13l4.500-4.500',
   remove: 'M4 4l8 8M12 4l-8 8',
+  edit: 'M11 2.5 L13.5 5 L5 13.5 L2 14 L2.5 11 Z',
 };
 
 function icon(name) {
@@ -1016,6 +1094,10 @@ function renderQueue() {
                 el('span', { class: 'file-state' }, fileStateText(file)),
               ),
               el('span', { class: 'row-actions' },
+                iconButton('edit', `Edit ${file.relPath}`, `f-edit-${file.id}`, {
+                  disabled: locked,
+                  onClick: () => openEditor(file),
+                }),
                 iconButton('up', `Move ${file.relPath} up`, `f-up-${file.id}`, {
                   disabled: locked || fileIndex === 0,
                   onClick: rerender(() => {
@@ -1052,6 +1134,7 @@ function renderQueue() {
   $('add-files').disabled = locked;
   $('add-folder').disabled = locked;
   $('paste').disabled = locked;
+  $('new-script').disabled = locked;
   $('backup').disabled = locked;
   $('restore').disabled = locked;
   $('disconnect').disabled = locked;
@@ -1248,10 +1331,10 @@ function renderLog() {
     ));
   }
 
-  if (file.pastedText && file.status === 'idle') {
-    const isCut = file.pastedText.length > MAX_PASTE_PREVIEW;
+  if (file.text && file.status === 'idle') {
+    const isCut = file.text.length > MAX_PASTE_PREVIEW;
     sections.push(el('pre', { class: 'pasted-preview' },
-      isCut ? `${file.pastedText.slice(0, MAX_PASTE_PREVIEW)}\n…` : file.pastedText,
+      isCut ? `${file.text.slice(0, MAX_PASTE_PREVIEW)}\n…` : file.text,
     ));
   }
   sections.push(el('ul', { class: 'entries' }, ...visible.map(renderEntry)));
@@ -1368,8 +1451,26 @@ $('disconnect').addEventListener('click', disconnect);
 $('add-files').addEventListener('click', () => $('file-input').click());
 $('add-folder').addEventListener('click', () => $('folder-input').click());
 $('paste').addEventListener('click', pasteFromButton);
+$('new-script').addEventListener('click', () => openEditor(null));
+$('editor-cancel').addEventListener('click', () => $('editor-dialog').close());
+$('editor-save').addEventListener('click', saveEditor);
+$('editor-text').addEventListener('input', updateEditorCount);
+$('editor-text').addEventListener('keydown', (event) => {
+  if (event.key === 'Tab') {
+    event.preventDefault();
+    const area = event.target;
+    const { selectionStart: start, selectionEnd: end } = area;
+    area.value = `${area.value.slice(0, start)}  ${area.value.slice(end)}`;
+    area.selectionStart = area.selectionEnd = start + 2;
+    updateEditorCount();
+  } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+    event.preventDefault();
+    saveEditor();
+  }
+});
 document.addEventListener('paste', (event) => {
-  if ($('app-view').hidden || state.running || $('confirm-dialog').open) return;
+  if ($('app-view').hidden || state.running || $('confirm-dialog').open || $('editor-dialog').open) return;
+  if (event.target.closest('input, textarea, [contenteditable]')) return;
   event.preventDefault();
   addFromPaste(event.clipboardData);
 });

@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
 </head>
-<body>
+<body data-public="__APP_PUBLIC__">
 
   <main id="connect-view" class="connect-view">
     <div class="connect-card">
@@ -132,6 +132,7 @@
         <div class="panel-head">
           <h2 id="scripts-title">Scripts <span id="script-count" class="count"></span></h2>
           <div class="actions">
+            <button id="new-script" class="btn" type="button">New</button>
             <button id="add-files" class="btn" type="button">Add files</button>
             <button id="add-folder" class="btn" type="button">Add folder</button>
             <button id="paste" class="btn" type="button">Paste</button>
@@ -143,8 +144,8 @@
         <p id="add-notice" class="notice" role="status" hidden></p>
 
         <div id="queue-empty" class="empty">
-          <strong>Drag and drop or paste your scripts here</strong>
-          <span>Drag in files or folders, or press Ctrl+V to paste copied files or SQL text. You can also use the buttons above, and add as many folders as you need.</span>
+          <strong>Add, write, or paste your scripts here</strong>
+          <span>Click New to write SQL, drag in files or folders, or press Ctrl+V to paste copied files or SQL text. You can also use the buttons above.</span>
         </div>
         <div id="queue" class="queue"></div>
 
@@ -203,6 +204,24 @@
     <div class="dialog-actions">
       <button id="confirm-cancel" class="btn" type="button" autofocus>Cancel</button>
       <button id="confirm-run" class="btn primary" type="button"></button>
+    </div>
+  </dialog>
+
+  <dialog id="editor-dialog" class="dialog editor-dialog" aria-labelledby="editor-title">
+    <h2 id="editor-title">New script</h2>
+    <div class="field">
+      <label for="editor-name">Name</label>
+      <input id="editor-name" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="editor-text">SQL</label>
+      <textarea id="editor-text" class="editor-text" spellcheck="false" autocomplete="off" placeholder="Type or paste SQL here…"></textarea>
+    </div>
+    <div class="dialog-actions editor-actions">
+      <span id="editor-count" class="muted"></span>
+      <span class="spacer"></span>
+      <button id="editor-cancel" class="btn" type="button">Cancel</button>
+      <button id="editor-save" class="btn primary" type="button">Save</button>
     </div>
   </dialog>
 
