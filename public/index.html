@@ -209,13 +209,28 @@
 
   <dialog id="editor-dialog" class="dialog editor-dialog" aria-labelledby="editor-title">
     <h2 id="editor-title">New script</h2>
-    <div class="field">
-      <label for="editor-name">Name</label>
-      <input id="editor-name" autocomplete="off" spellcheck="false">
-    </div>
-    <div class="field">
-      <label for="editor-text">SQL</label>
-      <textarea id="editor-text" class="editor-text" spellcheck="false" autocomplete="off" placeholder="Type or paste SQL here…"></textarea>
+    <div class="editor-body">
+      <aside class="schema-panel" aria-label="Tables">
+        <div class="schema-head">
+          <strong>Tables</strong>
+          <span id="schema-count" class="muted"></span>
+        </div>
+        <input id="schema-search" type="search" placeholder="Search tables or columns…" autocomplete="off" spellcheck="false">
+        <div id="schema-list" class="schema-list"></div>
+      </aside>
+      <div class="editor-main">
+        <div class="field">
+          <label for="editor-name">Name</label>
+          <input id="editor-name" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field editor-sql-field">
+          <label for="editor-text">SQL</label>
+          <div class="editor-text-wrap">
+            <textarea id="editor-text" class="editor-text" spellcheck="false" autocomplete="off" placeholder="Type or paste SQL here… Click a table on the left, or start typing a table/column name for suggestions."></textarea>
+            <ul id="autocomplete-list" class="autocomplete-list" hidden role="listbox" aria-label="Suggestions"></ul>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="dialog-actions editor-actions">
       <span id="editor-count" class="muted"></span>

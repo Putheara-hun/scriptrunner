@@ -26,6 +26,8 @@ const MAX_SCRIPT_BYTES = (IS_PUBLIC ? 5 : 500) * 1024 * 1024;
 const STATEMENT_TIMEOUT_MS = IS_PUBLIC ? 60000 : 0;
 const SESSION_IDLE_MS = 30 * 60 * 1000;
 const MAX_SESSIONS = 500;
+const SCHEMA_TABLE_LIMIT = 500;
+const SCHEMA_CONCURRENCY = 6;
 
 const connectLimiter = IS_PUBLIC ? createRateLimiter({ windowMs: 60000, max: 15 }) : null;
 
@@ -252,6 +254,51 @@ async function handleBackup(req, res) {
   }
 }
 
+async function handleSchema(req, res) {
+  const session = requireSession(req);
+  let connection;
+  try {
+    connection = await openConnection(session.config);
+    if (!connection.introspect) {
+      sendJson(res, 200, { dialect: session.config.type, supported: false, tables: [], truncated: false });
+      return;
+    }
+
+    const tables = await connection.introspect.tables();
+    const limited = tables.slice(0, SCHEMA_TABLE_LIMIT);
+    const withColumns = new Array(limited.length);
+    let next = 0;
+    async function worker() {
+      for (let i = next++; i < limited.length; i = next++) {
+        const table = limited[i];
+        let columns = [];
+        try {
+          columns = await connection.introspect.columns(table);
+        } catch {
+          columns = [];
+        }
+        withColumns[i] = {
+          schema: table.schema ?? null,
+          name: table.name,
+          columns: columns.map((column) => ({ name: column.name, typeSql: column.typeSql })),
+        };
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(SCHEMA_CONCURRENCY, limited.length) }, worker));
+
+    sendJson(res, 200, {
+      dialect: session.config.type,
+      supported: true,
+      tables: withColumns,
+      truncated: tables.length > limited.length,
+    });
+  } catch (error) {
+    sendJson(res, 400, { error: `Could not load the table list: ${describeConnectionFailure(error, session.config)}` });
+  } finally {
+    await connection?.close().catch(() => {});
+  }
+}
+
 async function serveStatic(res, pathname) {
   const [file, contentType] = STATIC_FILES[pathname];
   let content = await readFile(path.join(ROOT, file));
@@ -295,6 +342,8 @@ async function route(req, res) {
     sendJson(res, 200, usage.totals());
   } else if (req.method === 'GET' && pathname === '/api/info') {
     sendJson(res, 200, { public: IS_PUBLIC });
+  } else if (req.method === 'GET' && pathname === '/api/schema') {
+    await handleSchema(req, res);
   } else if (req.method === 'POST' && pathname === '/api/connect') {
     await handleConnect(req, res);
   } else if (req.method === 'POST' && pathname === '/api/run') {

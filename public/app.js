@@ -92,6 +92,10 @@ const state = {
   pasteCount: 0,
   writtenCount: 0,
   editing: null,
+  schema: null,
+  schemaIndex: null,
+  schemaLoadError: null,
+  schemaExpanded: new Set(),
 };
 
 function el(tag, attributes = {}, ...children) {
@@ -482,6 +486,7 @@ function enterWorkspace() {
   $('connect-view').hidden = true;
   $('app-view').hidden = false;
   render();
+  loadSchema();
 }
 
 async function disconnect() {
@@ -489,6 +494,10 @@ async function disconnect() {
   state.session = null;
   state.lastRun = null;
   state.selectedId = null;
+  state.schema = null;
+  state.schemaIndex = null;
+  state.schemaLoadError = null;
+  state.schemaExpanded = new Set();
   allFiles().forEach(resetResult);
   document.title = 'DB AutoRun';
   $('app-view').hidden = true;
@@ -497,6 +506,48 @@ async function disconnect() {
   if (token) {
     await fetch('/api/disconnect', { method: 'POST', headers: { 'X-Session': token } }).catch(() => {});
   }
+}
+
+function buildSchemaIndex(schema) {
+  const tableList = [];
+  const tablesByName = new Map();
+  const columnEntries = [];
+
+  for (const table of schema.tables) {
+    const isDefaultSchema = !table.schema || ['dbo', 'public'].includes(table.schema);
+    const insertName = isDefaultSchema ? table.name : `${table.schema}.${table.name}`;
+    const displayName = table.schema ? `${table.schema}.${table.name}` : table.name;
+    const entry = { schema: table.schema, name: table.name, insertName, displayName, columns: table.columns };
+    tableList.push(entry);
+    for (const key of new Set([table.name, insertName, displayName])) {
+      tablesByName.set(key.toLowerCase(), entry);
+    }
+    for (const column of table.columns) {
+      columnEntries.push({ name: column.name, typeSql: column.typeSql, table: insertName });
+    }
+  }
+  return { tableList, tablesByName, columnEntries };
+}
+
+async function loadSchema() {
+  const { session } = state;
+  if (!session) return;
+  state.schema = null;
+  state.schemaIndex = null;
+  state.schemaLoadError = null;
+  renderSchemaPanel();
+  try {
+    const response = await fetch('/api/schema', { headers: { 'X-Session': session.token } });
+    const body = await response.json();
+    if (state.session !== session) return;
+    if (!response.ok) throw new Error(body.error || 'Could not load the table list.');
+    state.schema = body;
+    state.schemaIndex = body.supported === false ? null : buildSchemaIndex(body);
+  } catch {
+    if (state.session !== session) return;
+    state.schemaLoadError = 'Could not load the table list.';
+  }
+  renderSchemaPanel();
 }
 
 function comparePaths(a, b) {
@@ -704,8 +755,255 @@ async function openEditor(script) {
     $('editor-text').value = '';
   }
   updateEditorCount();
+  hideAutocomplete();
+  $('schema-search').value = '';
+  renderSchemaPanel();
   $('editor-dialog').showModal();
   $('editor-text').focus();
+}
+
+function renderSchemaPanel() {
+  const list = $('schema-list');
+  const countEl = $('schema-count');
+  const filter = $('schema-search').value.trim().toLowerCase();
+
+  if (state.schemaLoadError) {
+    list.replaceChildren(el('p', { class: 'schema-empty' }, state.schemaLoadError));
+    countEl.textContent = '';
+    return;
+  }
+  if (!state.schema) {
+    list.replaceChildren(el('p', { class: 'schema-empty' }, 'Loading tables…'));
+    countEl.textContent = '';
+    return;
+  }
+  if (state.schema.supported === false) {
+    list.replaceChildren(el('p', { class: 'schema-empty' }, 'Table browsing is not available for this database.'));
+    countEl.textContent = '';
+    return;
+  }
+
+  const { tableList } = state.schemaIndex;
+  countEl.textContent = plural(tableList.length, 'table');
+
+  const filtered = !filter
+    ? tableList
+    : tableList.filter((table) =>
+        table.displayName.toLowerCase().includes(filter) ||
+        table.columns.some((column) => column.name.toLowerCase().includes(filter)),
+      );
+
+  if (!filtered.length) {
+    list.replaceChildren(el('p', { class: 'schema-empty' }, 'No tables match.'));
+    return;
+  }
+
+  list.replaceChildren(...filtered.map((table) => {
+    const expanded = filter ? true : state.schemaExpanded.has(table.displayName);
+    const columns = filter
+      ? table.columns.filter((column) => column.name.toLowerCase().includes(filter) || table.displayName.toLowerCase().includes(filter))
+      : table.columns;
+
+    return el('div', { class: 'schema-table' },
+      el('div', { class: 'schema-table-row' },
+        el('button', {
+          type: 'button',
+          class: 'schema-table-head',
+          title: table.displayName,
+          onclick: () => {
+            if (state.schemaExpanded.has(table.displayName)) state.schemaExpanded.delete(table.displayName);
+            else state.schemaExpanded.add(table.displayName);
+            renderSchemaPanel();
+          },
+        },
+          el('span', { class: `schema-caret${expanded ? ' is-open' : ''}` }, '▸'),
+          el('span', { class: 'schema-table-name' }, table.displayName),
+        ),
+        el('button', {
+          type: 'button',
+          class: 'schema-insert-btn',
+          title: `Insert ${table.insertName}`,
+          onclick: () => insertIntoEditor(table.insertName),
+        }, '+'),
+      ),
+      expanded && el('ul', { class: 'schema-columns' },
+        ...columns.map((column) => el('li', {
+          class: 'schema-column',
+          title: `Insert ${column.name}`,
+          onclick: () => insertIntoEditor(column.name),
+        },
+          el('span', { class: 'schema-column-name' }, column.name),
+          column.typeSql && el('span', { class: 'schema-column-type' }, column.typeSql),
+        )),
+      ),
+    );
+  }));
+}
+
+function insertIntoEditor(text) {
+  const textarea = $('editor-text');
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const value = textarea.value;
+  textarea.value = `${value.slice(0, start)}${text}${value.slice(end)}`;
+  const pos = start + text.length;
+  textarea.focus();
+  textarea.setSelectionRange(pos, pos);
+  hideAutocomplete();
+  updateEditorCount();
+}
+
+const CARET_MIRROR_PROPS = [
+  'boxSizing', 'width', 'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+  'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'fontStyle', 'fontVariant', 'fontWeight',
+  'fontSize', 'lineHeight', 'fontFamily', 'textAlign', 'textTransform', 'textIndent', 'letterSpacing',
+  'wordSpacing', 'tabSize',
+];
+
+function caretCoordinates(textarea, position) {
+  const div = document.createElement('div');
+  const computed = getComputedStyle(textarea);
+  div.style.position = 'absolute';
+  div.style.visibility = 'hidden';
+  div.style.whiteSpace = 'pre-wrap';
+  div.style.wordWrap = 'break-word';
+  for (const prop of CARET_MIRROR_PROPS) div.style[prop] = computed[prop];
+  div.style.width = `${textarea.clientWidth}px`;
+  document.body.append(div);
+
+  div.textContent = textarea.value.slice(0, position);
+  const span = document.createElement('span');
+  span.textContent = textarea.value.slice(position) || '.';
+  div.append(span);
+
+  const coordinates = {
+    top: span.offsetTop + parseInt(computed.borderTopWidth, 10),
+    left: span.offsetLeft + parseInt(computed.borderLeftWidth, 10),
+    height: span.offsetHeight,
+  };
+  div.remove();
+  return coordinates;
+}
+
+function currentWordRange(text, caret) {
+  let start = caret;
+  while (start > 0 && /[\w.]/.test(text[start - 1])) start--;
+  return { start, word: text.slice(start, caret) };
+}
+
+function buildSuggestions(word) {
+  const index = state.schemaIndex;
+  if (!index) return [];
+  const dot = word.lastIndexOf('.');
+
+  if (dot >= 0) {
+    const table = index.tablesByName.get(word.slice(0, dot).toLowerCase());
+    if (!table) return [];
+    const needle = word.slice(dot + 1).toLowerCase();
+    return table.columns
+      .filter((column) => column.name.toLowerCase().startsWith(needle))
+      .slice(0, 12)
+      .map((column) => ({ type: 'column', label: column.name, detail: column.typeSql || '', insertText: column.name }));
+  }
+
+  const needle = word.toLowerCase();
+  const tableMatches = index.tableList
+    .filter((table) => table.insertName.toLowerCase().startsWith(needle) || table.name.toLowerCase().startsWith(needle))
+    .slice(0, 8)
+    .map((table) => ({ type: 'table', label: table.displayName, detail: 'table', insertText: table.insertName }));
+  const columnMatches = index.columnEntries
+    .filter((column) => column.name.toLowerCase().startsWith(needle))
+    .slice(0, 8)
+    .map((column) => ({ type: 'column', label: column.name, detail: column.table, insertText: column.name }));
+  return [...tableMatches, ...columnMatches].slice(0, 14);
+}
+
+let currentSuggestions = [];
+let activeSuggestionIndex = -1;
+let currentWordInfo = null;
+
+function hideAutocomplete() {
+  $('autocomplete-list').hidden = true;
+  currentSuggestions = [];
+  activeSuggestionIndex = -1;
+  currentWordInfo = null;
+}
+
+function renderAutocomplete() {
+  const list = $('autocomplete-list');
+  list.replaceChildren(...currentSuggestions.map((suggestion, index) => el('li', {
+    class: `suggestion${index === activeSuggestionIndex ? ' is-active' : ''}`,
+    role: 'option',
+    'aria-selected': String(index === activeSuggestionIndex),
+    onmousedown: (event) => event.preventDefault(),
+    onmouseup: () => acceptSuggestion(index),
+    onmousemove: () => {
+      if (activeSuggestionIndex !== index) {
+        activeSuggestionIndex = index;
+        renderAutocomplete();
+      }
+    },
+  },
+    el('span', { class: `suggestion-icon suggestion-icon-${suggestion.type}` }, suggestion.type === 'table' ? 'T' : 'C'),
+    el('span', { class: 'suggestion-label' }, suggestion.label),
+    suggestion.detail && el('span', { class: 'suggestion-detail' }, suggestion.detail),
+  )));
+  list.hidden = currentSuggestions.length === 0;
+}
+
+function positionAutocomplete() {
+  const textarea = $('editor-text');
+  const list = $('autocomplete-list');
+  const coords = caretCoordinates(textarea, currentWordInfo.end);
+  list.style.top = `${textarea.offsetTop + coords.top + coords.height - textarea.scrollTop + 2}px`;
+  list.style.left = `${textarea.offsetLeft + coords.left - textarea.scrollLeft}px`;
+}
+
+function moveActiveSuggestion(delta) {
+  if (!currentSuggestions.length) return;
+  activeSuggestionIndex = (activeSuggestionIndex + delta + currentSuggestions.length) % currentSuggestions.length;
+  renderAutocomplete();
+}
+
+function acceptSuggestion(index) {
+  const suggestion = currentSuggestions[index];
+  if (!suggestion || !currentWordInfo) return;
+  const textarea = $('editor-text');
+  const { start, end } = currentWordInfo;
+  const value = textarea.value;
+  textarea.value = `${value.slice(0, start)}${suggestion.insertText}${value.slice(end)}`;
+  const pos = start + suggestion.insertText.length;
+  textarea.focus();
+  textarea.setSelectionRange(pos, pos);
+  hideAutocomplete();
+  updateEditorCount();
+}
+
+function updateAutocomplete(options = {}) {
+  const textarea = $('editor-text');
+  if (!state.schemaIndex || textarea.selectionStart !== textarea.selectionEnd) {
+    hideAutocomplete();
+    return;
+  }
+  const caret = textarea.selectionStart;
+  const { start, word } = currentWordRange(textarea.value, caret);
+  const dot = word.lastIndexOf('.');
+  if (!options.force && dot < 0 && word.length < 2) {
+    hideAutocomplete();
+    return;
+  }
+
+  const suggestions = buildSuggestions(word);
+  if (!suggestions.length) {
+    hideAutocomplete();
+    return;
+  }
+
+  currentSuggestions = suggestions;
+  currentWordInfo = { start: dot >= 0 ? start + dot + 1 : start, end: caret };
+  activeSuggestionIndex = 0;
+  renderAutocomplete();
+  positionAutocomplete();
 }
 
 function saveEditor() {
@@ -738,6 +1036,7 @@ function saveEditor() {
     showAddNotice(`Added ${name}.`);
   }
   state.editing = null;
+  hideAutocomplete();
   $('editor-dialog').close();
   render();
 }
@@ -1479,10 +1778,42 @@ $('add-files').addEventListener('click', () => $('file-input').click());
 $('add-folder').addEventListener('click', () => $('folder-input').click());
 $('paste').addEventListener('click', pasteFromButton);
 $('new-script').addEventListener('click', () => openEditor(null));
-$('editor-cancel').addEventListener('click', () => $('editor-dialog').close());
+$('editor-cancel').addEventListener('click', () => { hideAutocomplete(); $('editor-dialog').close(); });
 $('editor-save').addEventListener('click', saveEditor);
-$('editor-text').addEventListener('input', updateEditorCount);
+$('schema-search').addEventListener('input', renderSchemaPanel);
+$('editor-text').addEventListener('input', () => {
+  updateEditorCount();
+  updateAutocomplete();
+});
+$('editor-text').addEventListener('blur', hideAutocomplete);
 $('editor-text').addEventListener('keydown', (event) => {
+  if (!$('autocomplete-list').hidden) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveActiveSuggestion(1);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveActiveSuggestion(-1);
+      return;
+    }
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault();
+      acceptSuggestion(activeSuggestionIndex);
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      hideAutocomplete();
+      return;
+    }
+  }
+  if (event.ctrlKey && event.code === 'Space') {
+    event.preventDefault();
+    updateAutocomplete({ force: true });
+    return;
+  }
   if (event.key === 'Tab') {
     event.preventDefault();
     const area = event.target;
