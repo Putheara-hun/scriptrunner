@@ -11,6 +11,14 @@
 <body data-public="__APP_PUBLIC__">
 
   <main id="connect-view" class="connect-view">
+    <aside id="database-panel" class="database-panel" hidden aria-label="Databases">
+      <div class="schema-head">
+        <strong>Databases</strong>
+        <span id="database-count" class="muted"></span>
+      </div>
+      <div id="database-list" class="schema-list"></div>
+    </aside>
+
     <div class="connect-card">
       <h1>DB AutoRun</h1>
       <p class="muted">Connect to a database, add your SQL scripts, and run them in order.</p>

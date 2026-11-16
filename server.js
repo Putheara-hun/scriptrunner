@@ -254,6 +254,51 @@ async function handleBackup(req, res) {
   }
 }
 
+async function handleListDatabases(req, res) {
+  if (connectLimiter) {
+    const { allowed, retryAfterMs } = connectLimiter.check(clientIp(req));
+    if (!allowed) {
+      const seconds = Math.ceil(retryAfterMs / 1000);
+      res.writeHead(429, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8', 'Retry-After': String(seconds) });
+      res.end(JSON.stringify({ error: `Too many connection attempts. Wait ${seconds} seconds and try again.` }));
+      return;
+    }
+  }
+
+  const config = parseConnectionForm(await readJson(req));
+  if (config.type === 'oracle') {
+    sendJson(res, 400, { error: 'Oracle does not list databases this way. Enter the service name directly.' });
+    return;
+  }
+
+  if (IS_PUBLIC) {
+    try {
+      config.resolvedHost = await resolveSafely(hostToResolve(config));
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+      return;
+    }
+    config.statementTimeoutMs = STATEMENT_TIMEOUT_MS;
+  }
+
+  let connection;
+  try {
+    connection = await openConnection({ ...config, database: '' });
+  } catch (error) {
+    sendJson(res, 400, { error: describeConnectionFailure(error, config) });
+    return;
+  }
+
+  try {
+    const databases = connection.listDatabases ? await connection.listDatabases() : [];
+    sendJson(res, 200, { databases });
+  } catch {
+    sendJson(res, 200, { databases: [] });
+  } finally {
+    await connection.close().catch(() => {});
+  }
+}
+
 async function handleSchema(req, res) {
   const session = requireSession(req);
   let connection;
@@ -344,6 +389,8 @@ async function route(req, res) {
     sendJson(res, 200, { public: IS_PUBLIC });
   } else if (req.method === 'GET' && pathname === '/api/schema') {
     await handleSchema(req, res);
+  } else if (req.method === 'POST' && pathname === '/api/list-databases') {
+    await handleListDatabases(req, res);
   } else if (req.method === 'POST' && pathname === '/api/connect') {
     await handleConnect(req, res);
   } else if (req.method === 'POST' && pathname === '/api/run') {

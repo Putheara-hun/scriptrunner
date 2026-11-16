@@ -354,6 +354,7 @@ function showConnectionFields(type) {
   $('verify-certificate').checked = saved.verifyCertificate ?? true;
   $('sysdba').checked = saved.sysdba ?? false;
   $('connect-error').hidden = true;
+  hideDatabasePanel();
   updateSecurityOptions();
 }
 
@@ -415,13 +416,71 @@ function showConnectError(message) {
   $('connect-error').hidden = false;
 }
 
-async function submitConnection(event) {
-  event.preventDefault();
-  const type = $('db-type').value;
-  const db = DB_TYPES[type];
-  const location = selectedLocation();
-  const form = {
-    type,
+function hideDatabasePanel() {
+  $('database-panel').hidden = true;
+  $('database-list').replaceChildren();
+}
+
+async function browseDatabases(form) {
+  $('connect-button').disabled = true;
+  $('connect-button').textContent = 'Looking up databases…';
+  try {
+    const response = await fetch('/api/list-databases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(form),
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      showConnectError(result.error);
+      return true;
+    }
+
+    if (!result.databases?.length) return false;
+    renderDatabasePanel(result.databases);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    $('connect-button').disabled = false;
+    $('connect-button').textContent = 'Connect';
+  }
+}
+
+function renderDatabasePanel(databases) {
+  $('database-count').textContent = plural(databases.length, 'database');
+  $('database-list').replaceChildren(el('ul', { class: 'database-list-items' },
+    ...databases.map((name) => el('li', {},
+      el('button', {
+        type: 'button',
+        class: 'database-item',
+        title: name,
+        onclick: () => {
+          $('database').value = name;
+          hideDatabasePanel();
+          $('connect-form').requestSubmit();
+        },
+      }, name),
+    )),
+    el('li', {},
+      el('button', {
+        type: 'button',
+        class: 'database-item is-default-choice',
+        title: 'Connect without choosing a database',
+        onclick: () => {
+          hideDatabasePanel();
+          connectNow();
+        },
+      }, 'Use the default database'),
+    ),
+  ));
+  $('database-panel').hidden = false;
+}
+
+function readConnectionForm() {
+  return {
+    type: $('db-type').value,
     server: $('server').value.trim(),
     port: Number($('port').value),
     database: $('database').value.trim(),
@@ -431,8 +490,26 @@ async function submitConnection(event) {
     verifyCertificate: !$('verify-option').hidden && $('verify-certificate').checked,
     sysdba: !$('sysdba-option').hidden && $('sysdba').checked,
   };
+}
+
+async function submitConnection(event) {
+  event.preventDefault();
+  $('connect-error').hidden = true;
+
+  const form = readConnectionForm();
+  if (!form.database && form.type !== 'oracle' && (await browseDatabases(form))) return;
+
+  await connectNow();
+}
+
+async function connectNow() {
+  const form = readConnectionForm();
+  const { type } = form;
+  const db = DB_TYPES[type];
+  const location = selectedLocation();
 
   $('connect-error').hidden = true;
+  hideDatabasePanel();
   $('connect-button').disabled = true;
   $('connect-button').textContent = 'Connecting…';
 
@@ -502,6 +579,7 @@ async function disconnect() {
   document.title = 'DB AutoRun';
   $('app-view').hidden = true;
   $('connect-view').hidden = false;
+  hideDatabasePanel();
   $('password').focus();
   if (token) {
     await fetch('/api/disconnect', { method: 'POST', headers: { 'X-Session': token } }).catch(() => {});
@@ -891,13 +969,43 @@ function currentWordRange(text, caret) {
   return { start, word: text.slice(start, caret) };
 }
 
-function buildSuggestions(word) {
+const ALIAS_STOPWORDS = new Set([
+  'where', 'group', 'order', 'having', 'join', 'inner', 'left', 'right', 'full', 'outer', 'on', 'union',
+  'intersect', 'except', 'limit', 'offset', 'fetch', 'with', 'set', 'values', 'returning', 'into', 'exec',
+  'execute', 'cross', 'natural', 'using', 'for', 'window', 'as', 'and', 'or', 'select', 'from',
+]);
+
+const ID_PART = '(?:\\[[^\\]\\r\\n]+\\]|"[^"\\r\\n]+"|`[^`\\r\\n]+`|[A-Za-z_][\\w$#]*)';
+const ALIAS_PATTERN = new RegExp(
+  `\\b(?:FROM|JOIN)\\s+(${ID_PART}(?:\\s*\\.\\s*${ID_PART}){0,2})\\s+(?:AS\\s+)?(${ID_PART})(?![\\w$#])`,
+  'gi',
+);
+
+function bareName(name) {
+  return name.replace(/[\[\]"`\s]/g, '').toLowerCase();
+}
+
+function extractAliases(text) {
+  const aliases = new Map();
+  ALIAS_PATTERN.lastIndex = 0;
+  let match;
+  while ((match = ALIAS_PATTERN.exec(text))) {
+    const [, rawTable, rawAlias] = match;
+    const alias = bareName(rawAlias);
+    if (!alias || ALIAS_STOPWORDS.has(alias)) continue;
+    aliases.set(alias, bareName(rawTable));
+  }
+  return aliases;
+}
+
+function buildSuggestions(word, aliases) {
   const index = state.schemaIndex;
   if (!index) return [];
   const dot = word.lastIndexOf('.');
 
   if (dot >= 0) {
-    const table = index.tablesByName.get(word.slice(0, dot).toLowerCase());
+    const prefix = word.slice(0, dot).toLowerCase();
+    const table = index.tablesByName.get(prefix) || index.tablesByName.get(aliases.get(prefix));
     if (!table) return [];
     const needle = word.slice(dot + 1).toLowerCase();
     return table.columns
@@ -979,6 +1087,17 @@ function acceptSuggestion(index) {
   updateEditorCount();
 }
 
+function syncAutocompleteToCaret() {
+  if ($('autocomplete-list').hidden) return;
+  const textarea = $('editor-text');
+  const movedOut =
+    !currentWordInfo ||
+    textarea.selectionStart !== textarea.selectionEnd ||
+    textarea.selectionStart < currentWordInfo.start ||
+    textarea.selectionStart > currentWordInfo.end;
+  if (movedOut) hideAutocomplete();
+}
+
 function updateAutocomplete(options = {}) {
   const textarea = $('editor-text');
   if (!state.schemaIndex || textarea.selectionStart !== textarea.selectionEnd) {
@@ -993,7 +1112,7 @@ function updateAutocomplete(options = {}) {
     return;
   }
 
-  const suggestions = buildSuggestions(word);
+  const suggestions = buildSuggestions(word, extractAliases(textarea.value));
   if (!suggestions.length) {
     hideAutocomplete();
     return;
@@ -1769,6 +1888,7 @@ $('copy-cmd')?.addEventListener('click', async () => {
     selection.addRange(range);
   }
 });
+$('database').addEventListener('input', hideDatabasePanel);
 $('encrypt').addEventListener('change', updateSecurityOptions);
 $('verify-certificate').addEventListener('change', updateSecurityOptions);
 $('connect-form').addEventListener('submit', submitConnection);
@@ -1786,6 +1906,11 @@ $('editor-text').addEventListener('input', () => {
   updateAutocomplete();
 });
 $('editor-text').addEventListener('blur', hideAutocomplete);
+$('editor-text').addEventListener('click', syncAutocompleteToCaret);
+$('editor-text').addEventListener('keyup', (event) => {
+  if (!event.key.startsWith('Arrow') && !['Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) return;
+  syncAutocompleteToCaret();
+});
 $('editor-text').addEventListener('keydown', (event) => {
   if (!$('autocomplete-list').hidden) {
     if (event.key === 'ArrowDown') {
