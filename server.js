@@ -299,6 +299,44 @@ async function handleListDatabases(req, res) {
   }
 }
 
+function groupColumnsByTable(rows) {
+  const byTable = new Map();
+  for (const row of rows) {
+    const key = `${row.schema ?? ''}.${row.table}`;
+    let table = byTable.get(key);
+    if (!table) {
+      table = { schema: row.schema ?? null, name: row.table, columns: [] };
+      byTable.set(key, table);
+    }
+    table.columns.push({ name: row.column, typeSql: row.typeSql });
+  }
+  return [...byTable.values()];
+}
+
+async function readTablesOneByOne(introspect) {
+  const tables = (await introspect.tables()).slice(0, SCHEMA_TABLE_LIMIT);
+  const out = new Array(tables.length);
+  let next = 0;
+  async function worker() {
+    for (let i = next++; i < tables.length; i = next++) {
+      const table = tables[i];
+      let columns = [];
+      try {
+        columns = await introspect.columns(table);
+      } catch {
+        columns = [];
+      }
+      out[i] = {
+        schema: table.schema ?? null,
+        name: table.name,
+        columns: columns.map((column) => ({ name: column.name, typeSql: column.typeSql })),
+      };
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(SCHEMA_CONCURRENCY, tables.length) }, worker));
+  return out;
+}
+
 async function handleSchema(req, res) {
   const session = requireSession(req);
   let connection;
@@ -309,33 +347,16 @@ async function handleSchema(req, res) {
       return;
     }
 
-    const tables = await connection.introspect.tables();
-    const limited = tables.slice(0, SCHEMA_TABLE_LIMIT);
-    const withColumns = new Array(limited.length);
-    let next = 0;
-    async function worker() {
-      for (let i = next++; i < limited.length; i = next++) {
-        const table = limited[i];
-        let columns = [];
-        try {
-          columns = await connection.introspect.columns(table);
-        } catch {
-          columns = [];
-        }
-        withColumns[i] = {
-          schema: table.schema ?? null,
-          name: table.name,
-          columns: columns.map((column) => ({ name: column.name, typeSql: column.typeSql })),
-        };
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(SCHEMA_CONCURRENCY, limited.length) }, worker));
+    const all = connection.introspect.overview
+      ? groupColumnsByTable(await connection.introspect.overview())
+      : await readTablesOneByOne(connection.introspect);
+    const limited = all.slice(0, SCHEMA_TABLE_LIMIT);
 
     sendJson(res, 200, {
       dialect: session.config.type,
       supported: true,
-      tables: withColumns,
-      truncated: tables.length > limited.length,
+      tables: limited,
+      truncated: all.length > limited.length,
     });
   } catch (error) {
     sendJson(res, 400, { error: `Could not load the table list: ${describeConnectionFailure(error, session.config)}` });

@@ -650,6 +650,9 @@ progress { display: block; width: 100%; height: 6px; margin-top: 8px; accent-col
 .editor-dialog {
   width: min(1040px, calc(100vw - 32px));
   max-height: calc(100vh - 48px);
+}
+
+.editor-dialog[open] {
   display: flex;
   flex-direction: column;
 }
